@@ -1,0 +1,65 @@
+name: Build & Release OffChat Android APK (v1)
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.5'
+
+      - name: Copy Web Assets into Android APK Assets
+        run: |
+          mkdir -p android/app/src/main/assets/www
+          cp index.html style.css app.js android/app/src/main/assets/www/
+
+      - name: Build Signed Release & Debug APK
+        working-directory: android
+        run: gradle assembleRelease assembleDebug --no-daemon
+
+      - name: Rename APK for Release v1.0.0
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk OffChat-v1.0.0.apk
+
+      - name: Upload APK as Workflow Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OffChat-v1.0.0-APK
+          path: OffChat-v1.0.0.apk
+
+      - name: Publish GitHub Release v1.0.0 with Compiled APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.0
+          name: "OffChat v1.0.0 (APK Android Hors-Ligne)"
+          body: |
+            ## OffChat v1.0.0 — Messagerie Mesh Hors-Ligne & QR Code
+            - **0 Donnée Mobile / 0 Boîtier LoRa** : Relais multi-sauts Bluetooth LE + Wi-Fi Direct + Porteurs DTN.
+            - **QR Code Unique par Utilisateur** : Ajout de contacts par scan QR hors-ligne (`offchat://pair?...`).
+            - **Groupes Maillés** : Interconnexion cryptographique automatique de vos contacts QR.
+            - **Personnalisation & Sauvegarde** : 5 thèmes (Komai, Discord, SimpleX, Amber, Crimson) + sélecteur de couleur libre + Export/Import JSON des contacts.
+          files: OffChat-v1.0.0.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
