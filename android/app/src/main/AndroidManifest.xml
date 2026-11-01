@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="org.offchat.mesh">
+    package="org.offchat.mesh"
+    android:versionCode="1"
+    android:versionName="1.0.0">
+
+    <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34" />
 
     <!-- Permissions hors-ligne Bluetooth LE, Wi-Fi Direct & Caméra QR Code -->
     <uses-permission android:name="android.permission.CAMERA" />
@@ -18,7 +22,7 @@
         android:label="OffChat"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
         <activity
-            android:name=".MainActivity"
+            android:name="org.offchat.mesh.MainActivity"
             android:exported="true"
             android:configChanges="orientation|screenSize|keyboardHidden">
             <intent-filter>
