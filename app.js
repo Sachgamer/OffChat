@@ -52,6 +52,7 @@ function randHex(len = 6) {
 function createCleanVault() {
   return {
     onboarded: false,
+    pushEnabled: true,
     theme: 'komai',
     customAccent: null,
     relayUrl: '',
@@ -63,6 +64,76 @@ function createCleanVault() {
     },
     rooms: []
   };
+}
+
+// --- SYSTÈME DE NOTIFICATIONS PUSH-UP (ANDROID NATIF + WEB + BANNIÈRE HEADS-UP + BIP AUDIO) ---
+function playNotificationSound() {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(880, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(1320, ctx.currentTime + 0.12);
+    gain.gain.setValueAtTime(0.12, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.2);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.2);
+  } catch (_) {}
+}
+
+function sendPushNotification(title, body, targetRoomId = null) {
+  if (vault.pushEnabled === false) return;
+
+  playNotificationSound();
+  if (navigator.vibrate) {
+    try { navigator.vibrate([120, 60, 120]); } catch (_) {}
+  }
+
+  // 1. Pont natif Android (NotificationChannel IMPORTANCE_HIGH)
+  if (window.OffChatNative && typeof window.OffChatNative.showPushNotification === 'function') {
+    try {
+      window.OffChatNative.showPushNotification(title, body);
+    } catch (_) {}
+  } else if ('Notification' in window && Notification.permission === 'granted') {
+    // 2. Notification système Web standard
+    try {
+      new Notification(title, { body });
+    } catch (_) {}
+  }
+
+  // 3. Bannière Push-Up (Heads-Up Toast) en haut de l'écran
+  const container = document.getElementById('push-toast-container');
+  if (!container) return;
+  const toast = document.createElement('div');
+  toast.className = 'push-toast';
+  toast.innerHTML = `
+    <span style="font-size:1.2rem;">🔔</span>
+    <div class="push-toast-meta">
+      <div class="push-toast-title"></div>
+      <div class="push-toast-body"></div>
+    </div>
+    <span style="font-size:0.75rem;color:var(--text-muted)">✕</span>
+  `;
+  toast.querySelector('.push-toast-title').textContent = title;
+  toast.querySelector('.push-toast-body').textContent = body;
+
+  toast.addEventListener('click', () => {
+    if (targetRoomId) {
+      selectRoom(targetRoomId);
+      setMobileView('chat');
+    }
+    toast.remove();
+  });
+
+  container.prepend(toast);
+  setTimeout(() => {
+    if (toast.parentNode) toast.remove();
+  }, 4200);
 }
 
 let vault = loadVaultSync();
@@ -444,6 +515,7 @@ function triggerIncomingMessage() {
   saveVault();
   renderRoomList();
   renderChatStream();
+  sendPushNotification(`Nouveau message de ${sender}`, text, room.id);
 }
 
 document.getElementById('menu-sim-hop').addEventListener('click', triggerIncomingMessage);
@@ -542,6 +614,7 @@ document.getElementById('btn-create-group-confirm').addEventListener('click', ()
   groupModal.close();
   selectRoom(id);
   setMobileView('chat');
+  sendPushNotification(`Groupe créé : ${name}`, `${memberLabels.length} pairs interconnectés`, id);
 });
 
 // --- MODAL QR CODE UNIQUE & CAMÉRA ---
@@ -665,6 +738,7 @@ function addContactRoom({ alias, fp, q }) {
     };
     vault.rooms.unshift(existing);
     saveVault();
+    sendPushNotification(`Contact QR ajouté : ${cleanAlias}`, `Empreinte #${fingerprint} sauvegardée`, id);
   }
 
   stopCamera();
@@ -731,16 +805,46 @@ document.getElementById('btn-start-cam').addEventListener('click', async () => {
   }
 });
 
-// --- MODAL PARAMÈTRES, RELAIS MAISON OPTIONNEL & SAUVEGARDE ---
+// --- MODAL PARAMÈTRES, NOTIFICATIONS PUSH-UP & SAUVEGARDE ---
 const settingsModal = document.getElementById('settings-modal');
+
+function updatePushToggleButton() {
+  const btn = document.getElementById('btn-toggle-push');
+  if (!btn) return;
+  const active = vault.pushEnabled !== false;
+  btn.textContent = active ? '🔔 Activées' : '🔕 Désactivées';
+}
 
 function openSettings() {
   closeDrawer();
   document.getElementById('settings-alias-input').value = vault.user.alias;
   document.getElementById('settings-relay-input').value = vault.relayUrl || '';
+  updatePushToggleButton();
   renderSavedContactsInSettings();
   settingsModal.showModal();
 }
+
+document.getElementById('btn-toggle-push').addEventListener('click', async () => {
+  vault.pushEnabled = vault.pushEnabled === false;
+  if (vault.pushEnabled) {
+    if (window.OffChatNative && typeof window.OffChatNative.requestPermission === 'function') {
+      try { window.OffChatNative.requestPermission(); } catch (_) {}
+    } else if ('Notification' in window && Notification.permission !== 'granted') {
+      try { await Notification.requestPermission(); } catch (_) {}
+    }
+  }
+  updatePushToggleButton();
+  saveVault();
+});
+
+document.getElementById('btn-test-push').addEventListener('click', () => {
+  vault.pushEnabled = true;
+  updatePushToggleButton();
+  sendPushNotification(
+    'OffChat Push-Up Actif 🔔',
+    'Les notifications push hors-ligne (Bluetooth LE / Wi-Fi Direct) fonctionnent parfaitement !'
+  );
+});
 
 function renderSavedContactsInSettings() {
   const listEl = document.getElementById('saved-contacts-list');
@@ -822,6 +926,7 @@ function connectOptionalHomeRelay() {
             saveVault();
             renderRoomList();
             renderChatStream();
+            sendPushNotification(`Message de ${pkt.senderAlias}`, pkt.text, room.id);
           }
         }
       } catch (_) {}

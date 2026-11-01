@@ -27,8 +27,7 @@ cp "$PROJECT_DIR/index.html" "$PROJECT_DIR/style.css" "$PROJECT_DIR/app.js" "$BU
   --lib "$ANDROID_JAR" \
   --min-api 24 \
   --output "$BUILD_DIR/dex" \
-  "$BUILD_DIR/classes/org/offchat/mesh/MainActivity.class" \
-  "$BUILD_DIR/classes/org/offchat/mesh/MainActivity\$1.class"
+  "$BUILD_DIR/classes/org/offchat/mesh/"*.class
 
 # 4. Packager le manifeste et les assets avec aapt2
 "$BUILD_TOOLS/aapt2" link \

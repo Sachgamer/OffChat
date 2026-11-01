@@ -7,6 +7,9 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <!-- BANNIÈRE DE NOTIFICATION PUSH-UP EN HAUT DE L'ÉCRAN (HEADS-UP BANNER) -->
+  <div id="push-toast-container" class="push-toast-container" aria-live="polite"></div>
+
   <!-- ÉCRAN DE PREMIER LANCEMENT : CRÉATION DU PSEUDO & CLÉ UNIQUE (DÉMARRAGE DE ZÉRO) -->
   <div id="onboarding-screen" class="onboarding-screen hidden">
     <div class="onboarding-card">
@@ -305,10 +308,17 @@
       </div>
 
       <div class="settings-card">
-        <strong>2. Mon Profil</strong>
+        <strong>2. Mon Profil & Notifications Push-Up</strong>
         <div class="uri-row">
           <input type="text" id="settings-alias-input" placeholder="Votre pseudo..." class="full-input" />
           <button type="button" id="btn-update-alias" class="btn-new">Enregistrer</button>
+        </div>
+        <div class="mesh-row" style="margin-top:4px;">
+          <span>Notifications Push-Up (Système + Son) :</span>
+          <div style="display:flex;gap:6px;">
+            <button type="button" id="btn-toggle-push" class="btn-new">🔔 Activées</button>
+            <button type="button" id="btn-test-push" class="btn-green">Tester Push</button>
+          </div>
         </div>
       </div>
 

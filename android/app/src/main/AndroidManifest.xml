@@ -1,12 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="org.offchat.mesh"
-    android:versionCode="1"
-    android:versionName="1.0.0">
+    android:versionCode="2"
+    android:versionName="1.1.0">
 
     <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34" />
 
-    <!-- Permissions hors-ligne Bluetooth LE, Wi-Fi Direct & Caméra QR Code -->
+    <!-- Permissions hors-ligne Bluetooth LE, Wi-Fi Direct, Caméra QR & Notifications Push-Up -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.BLUETOOTH" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
@@ -24,6 +26,7 @@
         <activity
             android:name="org.offchat.mesh.MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|keyboardHidden">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
