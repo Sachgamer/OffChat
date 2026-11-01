@@ -2,52 +2,95 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OffChat | Mesh Offline & QR Messenger</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>OffChat | Messagerie Mesh & QR Hors-Ligne</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div class="app-grid" id="app-shell">
-    <!-- COLONNE 1 : Navigation, Thèmes & Transport 100% Smartphone (Sans LoRa) -->
-    <aside class="col-nav">
+  <!-- ÉCRAN DE PREMIER LANCEMENT : CRÉATION DU PSEUDO & CLÉ UNIQUE (DÉMARRAGE DE ZÉRO) -->
+  <div id="onboarding-screen" class="onboarding-screen hidden">
+    <div class="onboarding-card">
+      <div class="onboarding-logo">⚡ OffChat</div>
+      <h1>Bienvenue sur OffChat</h1>
+      <p>
+        Messagerie <strong>100 % hors-ligne</strong> (Bluetooth LE / Wi-Fi Direct) sans serveur central ni carte SIM.
+        Vos conversations sont sauvegardées de manière permanente sur votre téléphone.
+      </p>
+
+      <form id="onboarding-form" class="onboarding-form">
+        <label for="onboarding-alias">Choisissez votre pseudo :</label>
+        <input
+          type="text"
+          id="onboarding-alias"
+          placeholder="Ex: Sacha, Alex, Noeud_01..."
+          maxlength="24"
+          required
+          autocomplete="off"
+        />
+
+        <label>Choisissez votre thème de couleur :</label>
+        <div class="theme-presets onboarding-themes">
+          <button type="button" class="btn-new" data-theme="komai">🟢 Komai</button>
+          <button type="button" class="btn-new" data-theme="discord">🟣 Discord</button>
+          <button type="button" class="btn-new" data-theme="simplex">🔵 SimpleX</button>
+          <button type="button" class="btn-new" data-theme="amber">🟠 Amber</button>
+          <button type="button" class="btn-new" data-theme="crimson">🔴 Crimson</button>
+        </div>
+
+        <button type="submit" class="btn-green full-w onboarding-submit">
+          🔐 Générer mon QR Code Unique & Démarrer
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- FOND SOMBRE DU TIROIR BURGER (SUR SMARTPHONE) -->
+  <div id="drawer-backdrop" class="drawer-backdrop hidden"></div>
+
+  <!-- STRUCTURE PRINCIPALE ADAPTATIVE (MOBILE 1 ÉCRAN / DESKTOP 3 COLONNES) -->
+  <div class="app-grid" id="app-shell" data-mobile-view="list">
+    <!-- COLONNE 1 / MENU TIROIR BURGER -->
+    <aside class="col-nav" id="col-nav">
       <div>
         <div class="profile-box">
           <div class="profile-left" id="btn-profile-qr" title="Voir mon QR Code unique">
-            <div class="profile-avatar" id="my-avatar-box">BO</div>
+            <div class="profile-avatar" id="my-avatar-box">--</div>
             <div class="profile-meta">
-              <div class="profile-handle" id="my-handle-label">@bob:8f9a</div>
-              <div class="profile-name" id="my-name-label">Bob</div>
+              <div class="profile-handle" id="my-handle-label">@user</div>
+              <div class="profile-name" id="my-name-label">Utilisateur</div>
             </div>
           </div>
           <button class="gear-btn" id="btn-open-theme" title="Personnaliser les couleurs">🎨</button>
           <button class="gear-btn" id="btn-open-settings" title="Paramètres & Sauvegarde">⚙</button>
+          <button class="gear-btn mobile-only" id="btn-close-drawer" title="Fermer le menu">✕</button>
         </div>
 
         <nav class="cat-list">
           <button class="cat-item active" data-cat="all">
-            <span class="cat-left"><span class="cat-icon">🌐</span> All rooms</span>
+            <span class="cat-left"><span class="cat-icon">🌐</span> Toutes les discussions</span>
+            <span class="count-badge" id="badge-all">0</span>
           </button>
           <button class="cat-item" data-cat="people">
-            <span class="cat-left"><span class="cat-icon">👤</span> People (QR)</span>
-            <span class="count-badge" id="badge-people">2</span>
+            <span class="cat-left"><span class="cat-icon">👤</span> Contacts (QR)</span>
+            <span class="count-badge" id="badge-people">0</span>
           </button>
           <button class="cat-item" data-cat="groups">
-            <span class="cat-left"><span class="cat-icon">👥</span> Groups (Mesh)</span>
-            <span class="count-badge" id="badge-groups">1</span>
+            <span class="cat-left"><span class="cat-icon">👥</span> Groupes (Mesh)</span>
+            <span class="count-badge" id="badge-groups">0</span>
           </button>
           <button class="cat-item" id="btn-nav-newgroup" type="button">
             <span class="cat-left"><span class="cat-icon">➕</span> Créer un Groupe</span>
           </button>
           <button class="cat-item" id="btn-nav-settings" type="button">
-            <span class="cat-left"><span class="cat-icon">🎨</span> Couleurs & Backup</span>
+            <span class="cat-left"><span class="cat-icon">💾</span> Couleurs & Sauvegarde</span>
           </button>
         </nav>
       </div>
 
       <div class="mesh-footer">
         <div class="mesh-row">
-          <span>Empreinte</span>
-          <strong class="mesh-live" id="my-fp-short">#8F9A2C</strong>
+          <span>Mon Empreinte</span>
+          <strong class="mesh-live" id="my-fp-short">#------</strong>
         </div>
         <div class="mesh-row">
           <span>Relais (0 LoRa)</span>
@@ -55,23 +98,38 @@
         </div>
         <div class="footer-btns">
           <button class="btn-scan-sidebar" id="btn-sidebar-myqr">▣ Mon QR</button>
-          <button class="btn-scan-sidebar accent" id="btn-sidebar-group">👥 +Groupe</button>
+          <button class="btn-scan-sidebar accent" id="btn-sidebar-scan">＋ Scanner QR</button>
         </div>
       </div>
     </aside>
 
-    <!-- COLONNE 2 : Liste des Salons, Groupes & Contacts QR -->
-    <section class="col-rooms">
+    <!-- COLONNE 2 : ÉCRAN D'ACCUEIL MOBILE (LISTE DES DISCUSSIONS & GROUPES) -->
+    <section class="col-rooms" id="col-rooms">
+      <!-- Barre supérieure mobile avec bouton Burger ☰ -->
+      <header class="mobile-list-header">
+        <button type="button" class="burger-btn" id="btn-open-drawer" aria-label="Ouvrir le menu">☰</button>
+        <div class="mobile-brand">
+          <strong>OffChat</strong>
+          <span id="mobile-sub-fp" class="mobile-sub-fp">0 Data • Stockage permanent</span>
+        </div>
+        <div class="mobile-top-actions">
+          <button type="button" class="gear-btn" id="btn-mobile-myqr" title="Mon QR Code">▣</button>
+          <button type="button" class="gear-btn" id="btn-mobile-settings" title="Paramètres & Couleurs">⚙</button>
+        </div>
+      </header>
+
       <div id="room-list" class="room-list"></div>
+
       <div class="need-more-row">
-        <button class="btn-new" id="btn-new-room">＋ Scan QR</button>
-        <button class="btn-new" id="btn-new-group-col2">👥 +Groupe</button>
+        <button class="btn-new flex-1" id="btn-new-room">▣ Mon QR / ＋ Scanner</button>
+        <button class="btn-new flex-1" id="btn-new-group-col2">👥 +Groupe</button>
       </div>
     </section>
 
-    <!-- COLONNE 3 : Onglets + En-tête + Membres connectés + Flux + Saisie -->
-    <main class="col-chat">
-      <div class="top-tabs-bar">
+    <!-- COLONNE 3 : ÉCRAN DE CONVERSATION -->
+    <main class="col-chat" id="col-chat">
+      <!-- Barre d'onglets (Desktop uniquement) -->
+      <div class="top-tabs-bar desktop-only">
         <div id="tabs-bar" class="tabs-scroll"></div>
         <div class="top-new-wrap">
           <button class="btn-new" id="btn-top-theme">🎨 Thème</button>
@@ -79,44 +137,61 @@
         </div>
       </div>
 
-      <header class="room-header">
+      <!-- En-tête de la conversation active (avec bouton Retour ← sur mobile et menu ⋮) -->
+      <header class="room-header" id="room-header">
         <div class="room-header-left">
-          <div class="room-avatar" id="active-avatar">EN</div>
-          <span class="room-title" id="active-title">Escouade Nomade</span>
-          <span class="room-lock" id="active-badge">👥 3 pairs connectés • Sans matériel externe</span>
+          <button type="button" class="back-btn mobile-only" id="btn-back-to-list" aria-label="Retour aux discussions">←</button>
+          <div class="room-avatar" id="active-avatar">⚡</div>
+          <div class="room-title-stack">
+            <span class="room-title" id="active-title">Aucune discussion</span>
+            <span class="room-lock" id="active-badge">Scannez un QR Code pour commencer</span>
+          </div>
         </div>
+
+        <!-- Menu déroulant compact pour éviter tout débordement sur téléphone -->
         <div class="room-header-actions">
-          <button class="action-pill" id="btn-sim-hop">📡 Simuler Saut</button>
-          <button class="action-pill" id="btn-header-settings">🎨/💾</button>
+          <div class="dropdown-wrap">
+            <button type="button" class="gear-btn" id="btn-chat-menu" title="Actions de la conversation">⋮</button>
+            <div id="chat-dropdown" class="dropdown-menu hidden">
+              <button type="button" id="menu-sim-hop">📡 Tester réception message BLE</button>
+              <button type="button" id="menu-show-qr">▣ Afficher mon QR Code</button>
+              <button type="button" id="menu-new-group">👥 Créer / Connecter un Groupe</button>
+              <button type="button" id="menu-open-settings">🎨 Couleurs & Sauvegarde</button>
+              <button type="button" id="menu-delete-room" class="danger-item">🗑 Supprimer cette discussion</button>
+            </div>
+          </div>
         </div>
       </header>
 
-      <div id="group-members-strip" class="group-members-strip">
+      <!-- Bandeau des membres connectés (pour les groupes) -->
+      <div id="group-members-strip" class="group-members-strip hidden">
         <div id="group-members-pills" class="group-members-pills"></div>
-        <button type="button" class="btn-new" id="btn-add-peer-to-group">+ Connecter un pair</button>
+        <button type="button" class="btn-new shrink-0" id="btn-add-peer-to-group">+ Pair</button>
       </div>
 
+      <!-- Flux des messages ou État vide au premier démarrage -->
       <div id="chat-stream" class="chat-stream"></div>
 
+      <!-- Barre de saisie de message -->
       <form id="chat-form" class="chat-composer">
         <button type="button" class="icon-btn" id="btn-attach-qr" title="Mon QR Code Unique">▣</button>
         <input
           type="text"
           id="chat-input"
-          placeholder="Message chiffré relayé de téléphone en téléphone (0 boîtier externe)..."
+          placeholder="Écrire un message chiffré..."
           autocomplete="off"
         />
-        <button type="submit" class="icon-btn" title="Envoyer">➤</button>
+        <button type="submit" class="send-btn" title="Envoyer">➤</button>
       </form>
     </main>
   </div>
 
-  <!-- MODAL CRÉATION DE GROUPE MESH (SANS MODULE LORA) -->
+  <!-- MODAL CRÉATION DE GROUPE MESH -->
   <dialog id="group-modal" class="qr-dialog wide">
     <div class="modal-head">
       <div>
-        <h3>👥 Créer un Groupe & Connecter vos Contacts QR entre eux</h3>
-        <p>Fonctionne uniquement avec les puces intégrées aux téléphones (0 module LoRa requis).</p>
+        <h3>👥 Créer un Groupe & Connecter vos Contacts</h3>
+        <p>Interconnecte vos contacts QR entre eux sans serveur.</p>
       </div>
       <button id="btn-close-group" class="close-btn">&times;</button>
     </div>
@@ -124,7 +199,7 @@
     <div class="settings-body">
       <div class="settings-card">
         <label>Nom du groupe :</label>
-        <input type="text" id="new-group-name" placeholder="Ex: Campus, Festival, Quartier..." class="full-input" />
+        <input type="text" id="new-group-name" placeholder="Ex: Amis, Famille, Festival..." class="full-input" />
       </div>
 
       <div class="settings-card">
@@ -133,44 +208,46 @@
       </div>
 
       <div class="settings-card">
-        <label>Mode longue distance 100 % sur smartphone (sans matériel externe) :</label>
+        <label>Mode longue distance (100 % sur smartphone) :</label>
         <select id="new-group-transport" class="full-input">
-          <option value="Multi-Sauts BLE + Wi-Fi Direct (Epidemic Routing)">🔄 Multi-Sauts BLE + Wi-Fi Direct (Rebonds de téléphone en téléphone)</option>
-          <option value="Porteurs Mobiles DTN (Store-Carry-Forward)">🚶 Porteurs Mobiles DTN (Un membre qui se déplace transporte les paquets)</option>
-          <option value="Pont Hybride P2P (Si 1 seul téléphone capte du Wi-Fi)">🌐 Pont Hybride P2P (1 seul téléphone connecté relaie tout le groupe hors-ligne)</option>
+          <option value="Multi-Sauts BLE + Wi-Fi Direct">🔄 Multi-Sauts BLE + Wi-Fi Direct (Rebonds entre téléphones)</option>
+          <option value="Porteurs Mobiles DTN">🚶 Porteurs Mobiles DTN (Transport en déplacement)</option>
+          <option value="Pont Relais Hybride P2P">🌐 Pont Relais (Si 1 téléphone a du Wi-Fi ou votre relais maison)</option>
         </select>
       </div>
 
       <button type="button" id="btn-create-group-confirm" class="btn-green full-w">
-        🔗 Créer le Groupe & Connecter les membres entre eux
+        🔗 Créer le Groupe & Connecter les membres
       </button>
     </div>
   </dialog>
 
-  <!-- MODAL QR CODE UNIQUE -->
+  <!-- MODAL QR CODE UNIQUE & AJOUT DE CONTACT -->
   <dialog id="qr-modal" class="qr-dialog">
     <div class="modal-head">
       <div>
-        <h3>Identité QR Unique & Scan Hors-Ligne</h3>
+        <h3>Mon QR Code Unique & Scanner</h3>
       </div>
       <button id="btn-close-modal" class="close-btn">&times;</button>
     </div>
 
     <div class="modal-tabs">
       <button class="modal-tab active" data-tab="my-qr">1. Mon QR Unique</button>
-      <button class="modal-tab" data-tab="scan-qr">2. Scanner un Contact</button>
+      <button class="modal-tab" data-tab="scan-qr">2. Ajouter un Contact</button>
     </div>
 
+    <!-- Onglet 1 : Mon QR -->
     <div class="modal-pane active" id="pane-my-qr">
       <div class="qr-identity-card">
         <canvas id="qr-canvas" width="150" height="150"></canvas>
         <div class="qr-identity-details">
-          <div>Utilisateur : <strong id="qr-user-name">Bob</strong></div>
-          <div>Empreinte : <code id="qr-user-fp">#8F9A2C</code></div>
-          <button type="button" id="btn-rotate-qr" class="btn-new full-w">🔄 Régénérer clé & QR</button>
+          <div>Pseudo : <strong id="qr-user-name">-</strong></div>
+          <div>Empreinte : <code id="qr-user-fp">#------</code></div>
+          <button type="button" id="btn-rotate-qr" class="btn-new full-w">🔄 Nouvelle clé QR</button>
         </div>
       </div>
       <div class="uri-group">
+        <label>Votre lien QR (copiez-le ou faites-le scanner) :</label>
         <div class="uri-row">
           <input type="text" id="my-uri-input" readonly />
           <button type="button" id="btn-copy-uri" class="btn-green">Copier</button>
@@ -178,21 +255,39 @@
       </div>
     </div>
 
+    <!-- Onglet 2 : Scanner Caméra ou Coller Lien QR -->
     <div class="modal-pane" id="pane-scan-qr">
-      <button type="button" id="btn-sim-scan" class="btn-green full-w">
-        ⚡ Simuler le scan d'un QR Code unique à proximité
-      </button>
+      <div class="camera-scan-box">
+        <video id="qr-video" playsinline muted class="qr-video hidden"></video>
+        <div id="camera-placeholder" class="camera-placeholder">
+          <p>Pointez la caméra vers le QR Code d'un ami ou collez son lien ci-dessous</p>
+        </div>
+      </div>
+
+      <div class="uri-row">
+        <button type="button" id="btn-start-cam" class="btn-new flex-1">📷 Activer Caméra</button>
+        <button type="button" id="btn-sim-scan" class="btn-new flex-1">⚡ Contact test BLE</button>
+      </div>
+
+      <div class="uri-group">
+        <label>Ajouter en collant l'URI QR ou le pseudo du contact :</label>
+        <div class="uri-row">
+          <input type="text" id="paste-uri-input" placeholder="offchat://pair?alias=... ou Pseudo" class="full-input" />
+          <button type="button" id="btn-pair-uri" class="btn-green">Ajouter</button>
+        </div>
+      </div>
     </div>
   </dialog>
 
-  <!-- MODAL PARAMÈTRES : COULEURS & SAUVEGARDE -->
+  <!-- MODAL PARAMÈTRES : COULEURS, RELAIS MAISON OPTIONNEL & SAUVEGARDE PERMANENTE -->
   <dialog id="settings-modal" class="qr-dialog wide">
     <div class="modal-head">
       <div>
-        <h3>🎨 Personnalisation des Couleurs & Sauvegarde Contacts</h3>
+        <h3>⚙ Paramètres, Couleurs & Sauvegarde Permanente</h3>
       </div>
       <button id="btn-close-settings" class="close-btn">&times;</button>
     </div>
+
     <div class="settings-body">
       <div class="settings-card">
         <strong>1. Thème de couleurs (<span id="active-theme-name">Komai Matrix</span>)</strong>
@@ -204,25 +299,42 @@
           <button type="button" class="btn-new" data-theme="crimson">🔴 Crimson</button>
         </div>
         <div class="mesh-row">
-          <span>Couleur d'accent personnalisée :</span>
+          <span>Couleur d'accent libre :</span>
           <input type="color" id="custom-accent-picker" value="#54e87c" />
         </div>
       </div>
 
       <div class="settings-card">
+        <strong>2. Mon Profil</strong>
         <div class="uri-row">
-          <input type="text" id="settings-alias-input" placeholder="Votre pseudo..." />
-          <button type="button" id="btn-update-alias" class="btn-new">Mettre à jour</button>
+          <input type="text" id="settings-alias-input" placeholder="Votre pseudo..." class="full-input" />
+          <button type="button" id="btn-update-alias" class="btn-new">Enregistrer</button>
         </div>
-        <div id="saved-contacts-list" class="saved-contacts-list"></div>
       </div>
 
       <div class="settings-card">
-        <div class="backup-actions">
-          <button type="button" id="btn-export-json" class="btn-green">⬇ Exporter Contacts & Thème (.json)</button>
-          <button type="button" id="btn-copy-json" class="btn-new">📋 Copier JSON</button>
+        <strong>3. Relais Maison Optionnel (Longue distance Internet/LAN)</strong>
+        <p style="font-size:0.72rem;color:var(--text-muted)">
+          Vos messages sont stockés sur votre téléphone (comme SimpleX). Si vous avez un serveur maison (Raspberry Pi / VPS), vous pouvez renseigner son WebSocket pour relayer les paquets chiffrés à distance sans qu'il puisse les lire.
+        </p>
+        <div class="uri-row">
+          <input type="text" id="settings-relay-input" placeholder="Optionnel : wss://mon-relais-maison.local:8080" class="full-input" />
+          <button type="button" id="btn-save-relay" class="btn-new">Lier</button>
         </div>
-        <div id="settings-status-msg">Sauvegarde automatique active ✔</div>
+      </div>
+
+      <div class="settings-card">
+        <strong>4. Sauvegarde Permanente (Contacts & Historique complet)</strong>
+        <div id="saved-contacts-list" class="saved-contacts-list"></div>
+        <div class="backup-actions">
+          <button type="button" id="btn-export-json" class="btn-green flex-1">⬇ Exporter (.json)</button>
+          <button type="button" id="btn-copy-json" class="btn-new flex-1">📋 Copier JSON</button>
+          <label class="btn-new flex-1 text-center" style="cursor:pointer;">
+            ⬆ Importer (.json)
+            <input type="file" id="import-file-input" accept=".json" hidden />
+          </label>
+        </div>
+        <div id="settings-status-msg" class="mesh-live">Stockage permanent local + IndexedDB actif ✔</div>
       </div>
     </div>
   </dialog>
