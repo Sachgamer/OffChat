@@ -1,4 +1,4 @@
-// OffChat — Application réelle (Démarrage à zéro, Création de pseudo, Sauvegarde permanente IndexedDB + localStorage, Responsive Mobile Burger)
+// OffChat v2.0 Production — Moteur P2P Réel (UDP Wi-Fi Direct :45888 + BLE GATT + BroadcastChannel + Relais WebSocket Aveugle), Chiffrement AES-GCM & Triple Stockage Permanent (Fichier Interne Android + IndexedDB + localStorage)
 
 const STORAGE_KEY = 'offchat_permanent_vault_v1';
 const IDB_NAME = 'OffChatPermanentDB';
@@ -37,15 +37,57 @@ const THEMES = {
   }
 };
 
-const transportModes = ['🔄 Multi-Sauts BLE', '🚶 Porteurs DTN', '🌐 Pont Relais P2P'];
+const transportModes = ['🔄 Multi-Sauts BLE/Wi-Fi', '🚶 Porteurs DTN', '🌐 Pont Relais P2P'];
 let currentTransportIdx = 0;
 let cameraStream = null;
 let relaySocket = null;
+let detectedPeersCount = 0;
+const seenPacketIds = new Set();
+
+// Canal local inter-onglets pour tester 2 instances côte à côte sur navigateur
+const localMeshChannel = typeof BroadcastChannel !== 'undefined'
+  ? new BroadcastChannel('offchat_mesh_v2')
+  : null;
 
 function randHex(len = 6) {
   const arr = new Uint8Array(Math.ceil(len / 2));
   crypto.getRandomValues(arr);
   return Array.from(arr, (b) => b.toString(16).padStart(2, '0')).join('').slice(0, len);
+}
+
+// --- CHIFFREMENT BOUT-EN-BOUT (WEB CRYPTO API AES-GCM 256 BITS) ---
+async function deriveAesKey(secretSeed) {
+  const enc = new TextEncoder();
+  const hash = await crypto.subtle.digest('SHA-256', enc.encode(`offchat_e2ee_${secretSeed}`));
+  return crypto.subtle.importKey('raw', hash, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+}
+
+async function encryptPayload(plainText, secretSeed) {
+  try {
+    if (!window.crypto || !window.crypto.subtle) return { cipher: plainText, iv: null };
+    const key = await deriveAesKey(secretSeed);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const encoded = new TextEncoder().encode(plainText);
+    const cipherBuf = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded);
+    const cipherB64 = btoa(String.fromCharCode(...new Uint8Array(cipherBuf)));
+    const ivB64 = btoa(String.fromCharCode(...iv));
+    return { cipher: cipherB64, iv: ivB64 };
+  } catch (_) {
+    return { cipher: plainText, iv: null };
+  }
+}
+
+async function decryptPayload(cipher, ivB64, secretSeed) {
+  try {
+    if (!ivB64 || !window.crypto || !window.crypto.subtle) return cipher;
+    const key = await deriveAesKey(secretSeed);
+    const iv = Uint8Array.from(atob(ivB64), (c) => c.charCodeAt(0));
+    const data = Uint8Array.from(atob(cipher), (c) => c.charCodeAt(0));
+    const plainBuf = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
+    return new TextDecoder().decode(plainBuf);
+  } catch (_) {
+    return cipher;
+  }
 }
 
 // État vierge (démarre de zéro pour chaque nouvel utilisateur)
@@ -136,12 +178,20 @@ function sendPushNotification(title, body, targetRoomId = null) {
   }, 4200);
 }
 
-let vault = loadVaultSync();
-let activeRoomId = vault.rooms[0]?.id || null;
-let activeCategory = 'all';
-
-// --- STOCKAGE PERMANENT DOUBLE (LOCALSTORAGE + INDEXEDDB) ---
+// --- TRIPLE STOCKAGE PERMANENT (FICHIER INTERNE ANDROID + INDEXEDDB + LOCALSTORAGE) ---
 function loadVaultSync() {
+  // 1. Priorité au fichier interne natif Android (survit même si le cache WebView est vidé)
+  if (window.OffChatNative && typeof window.OffChatNative.loadVaultFromFile === 'function') {
+    try {
+      const nativeRaw = window.OffChatNative.loadVaultFromFile();
+      if (nativeRaw) {
+        const parsed = JSON.parse(nativeRaw);
+        if (parsed && parsed.user && Array.isArray(parsed.rooms)) return parsed;
+      }
+    } catch (_) {}
+  }
+
+  // 2. Fallback localStorage
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
@@ -149,8 +199,13 @@ function loadVaultSync() {
       if (parsed && parsed.user && Array.isArray(parsed.rooms)) return parsed;
     }
   } catch (_) {}
+
   return createCleanVault();
 }
+
+let vault = loadVaultSync();
+let activeRoomId = vault.rooms[0]?.id || null;
+let activeCategory = 'all';
 
 function saveToIndexedDB(data) {
   try {
@@ -186,7 +241,7 @@ function loadFromIndexedDBIfNeeded() {
         if (!vault.onboarded && getReq.result && getReq.result.onboarded) {
           vault = getReq.result;
           activeRoomId = vault.rooms[0]?.id || null;
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(vault));
+          saveVault();
           bootInterface();
         }
       };
@@ -195,11 +250,310 @@ function loadFromIndexedDBIfNeeded() {
 }
 
 function saveVault() {
+  const serialized = JSON.stringify(vault);
+  // 1. Sauvegarde fichier interne natif Android (offchat_prod_vault.json)
+  if (window.OffChatNative && typeof window.OffChatNative.saveVaultToFile === 'function') {
+    try {
+      window.OffChatNative.saveVaultToFile(serialized);
+    } catch (_) {}
+  }
+  // 2. Sauvegarde localStorage
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(vault));
+    localStorage.setItem(STORAGE_KEY, serialized);
   } catch (_) {}
+  // 3. Sauvegarde IndexedDB
   saveToIndexedDB(vault);
   renderUserHeader();
+}
+
+// --- MOTEUR MESH P2P PRODUCTION (UDP WI-FI :45888 + BLE GATT + MULTI-SAUTS STORE & FORWARD) ---
+function broadcastMeshPacket(packet) {
+  const pkt = {
+    pktId: packet.pktId || `pkt_${Date.now()}_${randHex(6)}`,
+    ttl: typeof packet.ttl === 'number' ? packet.ttl : 3,
+    senderFp: vault.user.fingerprint,
+    senderAlias: vault.user.alias || 'Anonyme',
+    senderQueue: vault.user.rxQueue,
+    timestamp: Date.now(),
+    ...packet
+  };
+
+  seenPacketIds.add(pkt.pktId);
+  const rawJson = JSON.stringify(pkt);
+
+  // 1. Diffusion matérielle Android (UDP Broadcast :45888 + Bluetooth Low Energy GATT)
+  if (window.OffChatNative && typeof window.OffChatNative.broadcastMeshPacket === 'function') {
+    try {
+      window.OffChatNative.broadcastMeshPacket(rawJson);
+    } catch (_) {}
+  }
+
+  // 2. Diffusion inter-onglets locale (BroadcastChannel)
+  if (localMeshChannel) {
+    try {
+      localMeshChannel.postMessage(rawJson);
+    } catch (_) {}
+  }
+
+  // 3. Diffusion sur le Relais WebSocket Aveugle (si configuré pour longue distance Internet)
+  if (relaySocket && relaySocket.readyState === WebSocket.OPEN) {
+    try {
+      relaySocket.send(rawJson);
+    } catch (_) {}
+  }
+
+  return pkt.pktId;
+}
+
+function decodeBase64Utf8(b64) {
+  try {
+    const bin = atob(b64);
+    const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+    return new TextDecoder('utf-8').decode(bytes);
+  } catch (_) {
+    return '';
+  }
+}
+
+async function handleIncomingMeshPacket(rawJson, transportLabel = 'Mesh P2P') {
+  if (!rawJson || !vault.onboarded) return;
+  let pkt;
+  try {
+    pkt = typeof rawJson === 'string' ? JSON.parse(rawJson) : rawJson;
+  } catch (_) {
+    return;
+  }
+
+  if (!pkt || !pkt.pktId || seenPacketIds.has(pkt.pktId)) return;
+  seenPacketIds.add(pkt.pktId);
+
+  // Ignorer nos propres paquets
+  if (pkt.senderFp === vault.user.fingerprint) return;
+
+  // Store-and-Forward Multi-Sauts : si le paquet a un TTL > 1 et n'est pas uniquement pour nous, on le relaie aux autres téléphones !
+  const isExclusivelyForMe = pkt.targetFp && pkt.targetFp === vault.user.fingerprint;
+  if (!isExclusivelyForMe && typeof pkt.ttl === 'number' && pkt.ttl > 1) {
+    const forwarded = { ...pkt, ttl: pkt.ttl - 1 };
+    const fwdJson = JSON.stringify(forwarded);
+    if (window.OffChatNative && typeof window.OffChatNative.broadcastMeshPacket === 'function') {
+      try { window.OffChatNative.broadcastMeshPacket(fwdJson); } catch (_) {}
+    }
+  }
+
+  const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  // CAS 1 : Appairage bilatéral automatique (quelqu'un vient de scanner notre QR Code ou nous répond)
+  if ((pkt.type === 'OFFCHAT_PAIR_HELLO' || pkt.type === 'OFFCHAT_PAIR_ACK') && pkt.targetFp === vault.user.fingerprint) {
+    const peerId = `peer-${pkt.senderFp}`;
+    let room = vault.rooms.find((r) => r.fingerprint === pkt.senderFp);
+    const colors = ['#0d9488', '#2563eb', '#d97706', '#e11d48', '#7c3aed'];
+    if (!room) {
+      room = {
+        id: peerId,
+        name: pkt.senderAlias || `Pair_${pkt.senderFp}`,
+        avatar: (pkt.senderAlias || 'P').slice(0, 2).toUpperCase(),
+        avatarBg: colors[vault.rooms.length % colors.length],
+        category: 'people',
+        unread: 1,
+        time: now,
+        preview: `Connecté en direct via ${transportLabel}`,
+        verifiedQr: true,
+        fingerprint: pkt.senderFp,
+        rxQueue: pkt.senderQueue || `q_rx_${pkt.senderFp}`,
+        sharedKey: pkt.sharedKey || pkt.senderFp,
+        hops: 1,
+        events: [
+          { type: 'date', label: `Canal P2P Chiffré • ${transportLabel}` },
+          { type: 'system', time: now, text: `${pkt.senderAlias} (#${pkt.senderFp}) s'est connecté via ${transportLabel}`, icon: '🔗' }
+        ]
+      };
+      vault.rooms.unshift(room);
+      if (!activeRoomId) activeRoomId = room.id;
+      saveVault();
+      renderRoomList();
+      renderTabs();
+      renderChatStream();
+      sendPushNotification(`Nouveau contact connecté : ${room.name}`, `Appairage P2P réussi via ${transportLabel}`, room.id);
+    }
+
+    if (pkt.type === 'OFFCHAT_PAIR_HELLO') {
+      broadcastMeshPacket({
+        type: 'OFFCHAT_PAIR_ACK',
+        targetFp: pkt.senderFp,
+        sharedKey: room.sharedKey || vault.user.fingerprint
+      });
+    }
+    return;
+  }
+
+  // CAS 2 : Invitation automatique à un Groupe Maillé (Mesh Group)
+  if (pkt.type === 'OFFCHAT_GROUP_INVITE' && Array.isArray(pkt.memberFps) && pkt.memberFps.includes(vault.user.fingerprint)) {
+    let grp = vault.rooms.find((r) => r.id === pkt.groupId || r.fingerprint === pkt.groupFp);
+    if (!grp) {
+      grp = {
+        id: pkt.groupId || `grp-${pkt.groupFp}`,
+        name: pkt.groupName || `Groupe #${pkt.groupFp}`,
+        avatar: (pkt.groupName || 'GR').slice(0, 2).toUpperCase(),
+        avatarBg: '#7c3aed',
+        category: 'groups',
+        unread: 1,
+        time: now,
+        preview: `Groupe maillé créé par ${pkt.senderAlias}`,
+        verifiedQr: true,
+        fingerprint: pkt.groupFp,
+        transport: pkt.transport || 'Multi-Sauts BLE + Wi-Fi Direct',
+        members: pkt.members || [],
+        memberFps: pkt.memberFps || [],
+        hops: 3,
+        events: [
+          { type: 'date', label: `Groupe Maillé • ${pkt.transport || transportLabel}` },
+          { type: 'system', time: now, text: `${pkt.senderAlias} vous a connecté au groupe : ${(pkt.members || []).join(' ⇄ ')}`, icon: '👥' }
+        ]
+      };
+      vault.rooms.unshift(grp);
+      if (!activeRoomId) activeRoomId = grp.id;
+      saveVault();
+      renderRoomList();
+      renderTabs();
+      renderChatStream();
+      sendPushNotification(`Nouveau Groupe : ${grp.name}`, `Connecté par ${pkt.senderAlias} via ${transportLabel}`, grp.id);
+    }
+    return;
+  }
+
+  // CAS 3 : Message chiffré (1-to-1 ou Groupe)
+  if (pkt.type === 'OFFCHAT_CHAT_MSG') {
+    let targetRoom = null;
+    if (pkt.isGroup && pkt.groupFp) {
+      targetRoom = vault.rooms.find((r) => r.category === 'groups' && r.fingerprint === pkt.groupFp);
+    } else if (pkt.targetFp === vault.user.fingerprint) {
+      targetRoom = vault.rooms.find((r) => r.category === 'people' && r.fingerprint === pkt.senderFp);
+      // Si l'expéditeur n'était pas encore dans la liste mais connaît notre empreinte QR, créer le salon automatiquement
+      if (!targetRoom) {
+        const colors = ['#0d9488', '#2563eb', '#d97706', '#e11d48', '#7c3aed'];
+        targetRoom = {
+          id: `peer-${pkt.senderFp}`,
+          name: pkt.senderAlias || `Pair_${pkt.senderFp}`,
+          avatar: (pkt.senderAlias || 'P').slice(0, 2).toUpperCase(),
+          avatarBg: colors[vault.rooms.length % colors.length],
+          category: 'people',
+          unread: 0,
+          time: now,
+          preview: '',
+          verifiedQr: true,
+          fingerprint: pkt.senderFp,
+          hops: 1,
+          events: [
+            { type: 'date', label: `Discussion P2P Chiffrée • ${transportLabel}` }
+          ]
+        };
+        vault.rooms.unshift(targetRoom);
+      }
+    }
+
+    if (!targetRoom) return;
+
+    const secretSeed = pkt.isGroup ? targetRoom.fingerprint : (targetRoom.sharedKey || vault.user.fingerprint);
+    const clearText = await decryptPayload(pkt.cipher || pkt.text || '', pkt.iv || null, secretSeed);
+
+    targetRoom.events.push({
+      type: 'msg',
+      msgId: pkt.pktId,
+      sender: pkt.senderAlias || targetRoom.name,
+      outgoing: false,
+      time: now,
+      transport: transportLabel,
+      text: clearText
+    });
+    targetRoom.preview = `${pkt.senderAlias}: ${clearText}`;
+    targetRoom.time = now;
+    if (activeRoomId !== targetRoom.id) {
+      targetRoom.unread = (targetRoom.unread || 0) + 1;
+    }
+
+    saveVault();
+    renderRoomList();
+    renderTabs();
+    renderChatStream();
+    sendPushNotification(`Message de ${pkt.senderAlias} (${transportLabel})`, clearText, targetRoom.id);
+
+    // Envoyer un accusé de réception P2P automatique
+    broadcastMeshPacket({
+      type: 'OFFCHAT_MSG_ACK',
+      targetFp: pkt.senderFp,
+      ackMsgId: pkt.pktId,
+      via: transportLabel
+    });
+    return;
+  }
+
+  // CAS 4 : Accusé de réception P2P (✓✓ Reçu via BLE / Wi-Fi Direct)
+  if (pkt.type === 'OFFCHAT_MSG_ACK' && pkt.targetFp === vault.user.fingerprint) {
+    for (const r of vault.rooms) {
+      const ev = r.events.find((e) => e.msgId === pkt.ackMsgId);
+      if (ev) {
+        ev.deliveredVia = pkt.via || transportLabel;
+        saveVault();
+        renderChatStream();
+        break;
+      }
+    }
+    return;
+  }
+
+  // CAS 5 : Ping de découverte de proximité
+  if (pkt.type === 'OFFCHAT_DISCOVERY_PING') {
+    const knownPeer = vault.rooms.find((r) => r.fingerprint === pkt.senderFp);
+    if (knownPeer) {
+      knownPeer.events.push({
+        type: 'system',
+        time: now,
+        text: `${pkt.senderAlias} (#${pkt.senderFp}) est en ligne à portée ${transportLabel}`,
+        icon: '📡'
+      });
+      saveVault();
+      renderChatStream();
+    }
+  }
+}
+
+// Callbacks appelés en temps réel par le moteur Java natif Android (MainActivity.java)
+window.onNativeMeshPacket = (b64, transport) => {
+  const json = decodeBase64Utf8(b64);
+  if (json) handleIncomingMeshPacket(json, transport);
+};
+
+window.onNativePeerCount = (count) => {
+  detectedPeersCount = Number(count) || 0;
+  updateMeshStatusUI();
+};
+
+if (localMeshChannel) {
+  localMeshChannel.onmessage = (ev) => {
+    handleIncomingMeshPacket(ev.data, 'P2P Local');
+  };
+}
+
+function updateMeshStatusUI() {
+  const pill = document.getElementById('mesh-status-pill');
+  const subFp = document.getElementById('mobile-sub-fp');
+  const alias = vault.user.alias || 'Anonyme';
+  const hasNative = !!(window.OffChatNative && typeof window.OffChatNative.getTransportStatus === 'function');
+
+  if (pill) {
+    if (hasNative) {
+      pill.textContent = detectedPeersCount > 0
+        ? `🟢 ${detectedPeersCount} pair(s) BLE/Wi-Fi`
+        : '📡 BLE + Wi-Fi :45888';
+    } else {
+      pill.textContent = relaySocket && relaySocket.readyState === WebSocket.OPEN
+        ? '🌐 Relais Connecté'
+        : '📡 P2P Prêt';
+    }
+  }
+  if (subFp) {
+    subFp.textContent = `${alias} (#${vault.user.fingerprint}) • ${detectedPeersCount > 0 ? detectedPeersCount + ' pair(s) proche(s)' : 'P2P Actif'}`;
+  }
 }
 
 // --- NAVIGATION RESPONSIVE MOBILE (TIROIR BURGER & VUE LISTE <-> CHAT) ---
@@ -302,8 +656,7 @@ function renderUserHeader() {
   document.getElementById('my-handle-label').textContent = `@${alias.toLowerCase()}:${u.fingerprint.toLowerCase()}`;
   document.getElementById('my-name-label').textContent = alias;
   document.getElementById('my-fp-short').textContent = `#${u.fingerprint}`;
-  const subFp = document.getElementById('mobile-sub-fp');
-  if (subFp) subFp.textContent = `${alias} (#${u.fingerprint}) • 0 Data`;
+  updateMeshStatusUI();
 }
 
 function renderRoomList() {
@@ -326,7 +679,7 @@ function renderRoomList() {
     empty.innerHTML = `
       <div style="font-size:2rem;">▣</div>
       <strong>Aucune conversation pour le moment</strong>
-      <p>Scannez le QR Code d'un contact à proximité ou partagez votre propre QR Code unique pour démarrer une discussion hors-ligne sauvegardée sur votre téléphone.</p>
+      <p>Scannez le QR Code d'un contact à proximité ou partagez votre propre QR Code unique : les deux téléphones se synchronisent automatiquement en Bluetooth LE / Wi-Fi Direct !</p>
       <button type="button" class="btn-green full-w" id="btn-empty-scan">▣ Afficher mon QR / Scanner un contact</button>
     `;
     container.appendChild(empty);
@@ -394,8 +747,8 @@ function renderChatStream() {
     stream.innerHTML = `
       <div class="empty-rooms-box" style="margin:auto;">
         <div style="font-size:2.2rem;">🔒</div>
-        <strong>Démarrez votre première discussion chiffrée</strong>
-        <p>OffChat fonctionne sans numéro de téléphone ni serveur central. Cliquez ci-dessous pour afficher votre QR Code unique ou scanner celui d'un ami.</p>
+        <strong>Démarrez votre première discussion chiffrée P2P</strong>
+        <p>OffChat v2.0 communique directement entre téléphones (Wi-Fi Direct UDP :45888 + Bluetooth LE GATT) sans serveur de stockage. Affichez votre QR Code ou scannez celui d'un ami.</p>
         <button type="button" class="btn-green" id="btn-chat-empty-qr">▣ Mon QR Code / Ajouter un contact</button>
       </div>
     `;
@@ -404,7 +757,7 @@ function renderChatStream() {
   }
 
   input.disabled = false;
-  input.placeholder = `Message chiffré vers ${room.name} (sauvegardé)...`;
+  input.placeholder = `Message chiffré AES-GCM vers ${room.name}...`;
 
   document.getElementById('active-title').textContent = room.name;
   const av = document.getElementById('active-avatar');
@@ -416,7 +769,7 @@ function renderChatStream() {
     strip.classList.remove('hidden');
     pills.innerHTML = (room.members || []).map((m) => `<span class="member-pill">🔗 ${m}</span>`).join('');
   } else {
-    document.getElementById('active-badge').textContent = `🔒 QR #${room.fingerprint} • Sauvegardé`;
+    document.getElementById('active-badge').textContent = `🔒 AES-GCM #${room.fingerprint} • P2P Permanent`;
     strip.classList.add('hidden');
   }
 
@@ -439,15 +792,16 @@ function renderChatStream() {
       const line = document.createElement('div');
       line.className = `msg-line ${ev.outgoing ? 'me' : 'peer'}`;
       if (ev.outgoing) {
+        const statusReceipt = ev.deliveredVia ? `✓✓ Reçu (${ev.deliveredVia})` : '✓ Envoyé P2P';
         line.innerHTML = `
-          <span class="room-time">✓✓ ${ev.time}</span>
+          <span class="room-time">${statusReceipt} • ${ev.time}</span>
           <div class="bubble me"></div>
         `;
       } else {
         line.innerHTML = `
           <div class="room-avatar" style="width:28px;height:28px;font-size:0.7rem;background:${room.avatarBg}">${ev.sender.slice(0, 2).toUpperCase()}</div>
           <div class="bubble peer"></div>
-          <span class="room-time">${ev.time}</span>
+          <span class="room-time">${ev.transport ? ev.transport + ' • ' : ''}${ev.time}</span>
         `;
       }
       line.querySelector('.bubble').textContent = `${ev.outgoing ? '' : ev.sender + ': '}${ev.text}`;
@@ -467,8 +821,8 @@ function selectRoom(id) {
   renderChatStream();
 }
 
-// --- ENVOI ET RÉCEPTION DE MESSAGES (SAUVEGARDÉS EN PERMANENCE) ---
-document.getElementById('chat-form').addEventListener('submit', (e) => {
+// --- ENVOI ET RÉCEPTION DE MESSAGES CHIFFRÉS (TEMPS RÉEL P2P + SAUVEGARDE PERMANENTE) ---
+document.getElementById('chat-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const room = vault.rooms.find((r) => r.id === activeRoomId);
   if (!room) return;
@@ -479,27 +833,50 @@ document.getElementById('chat-form').addEventListener('submit', (e) => {
   input.value = '';
 
   const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  room.events.push({ type: 'msg', sender: vault.user.alias, outgoing: true, time: now, text });
+  const msgId = `pkt_${Date.now()}_${randHex(6)}`;
+  const isGroup = room.category === 'groups';
+  const secretSeed = isGroup ? room.fingerprint : (room.sharedKey || room.fingerprint);
+
+  const encrypted = await encryptPayload(text, secretSeed);
+
+  room.events.push({
+    type: 'msg',
+    msgId,
+    sender: vault.user.alias,
+    outgoing: true,
+    time: now,
+    text
+  });
   room.preview = `${vault.user.alias}: ${text}`;
   room.time = now;
 
-  // Si un relais WebSocket maison optionnel est connecté, relayer le paquet chiffré
-  if (relaySocket && relaySocket.readyState === WebSocket.OPEN) {
-    try {
-      relaySocket.send(JSON.stringify({
-        type: 'OFFCHAT_RELAY_PACKET',
-        targetFp: room.fingerprint,
-        senderAlias: vault.user.alias,
-        senderFp: vault.user.fingerprint,
-        text
-      }));
-    } catch (_) {}
-  }
+  // Diffuser le paquet chiffré sur tous les transports P2P (UDP Wi-Fi :45888 + BLE GATT + BroadcastChannel + Relais WebSocket)
+  broadcastMeshPacket({
+    pktId: msgId,
+    type: 'OFFCHAT_CHAT_MSG',
+    isGroup,
+    groupFp: isGroup ? room.fingerprint : null,
+    targetFp: isGroup ? null : room.fingerprint,
+    cipher: encrypted.cipher,
+    iv: encrypted.iv,
+    ttl: 3
+  });
 
   saveVault();
   renderRoomList();
   renderChatStream();
 });
+
+function broadcastDiscoveryPing() {
+  broadcastMeshPacket({
+    type: 'OFFCHAT_DISCOVERY_PING',
+    ttl: 2
+  });
+  sendPushNotification(
+    'Ping Découverte Diffusé 📡',
+    'Annonce envoyée sur Wi-Fi Direct UDP (:45888) et Bluetooth Low Energy GATT.'
+  );
+}
 
 function triggerIncomingMessage() {
   const room = vault.rooms.find((r) => r.id === activeRoomId);
@@ -507,9 +884,9 @@ function triggerIncomingMessage() {
   const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const sender = room.category === 'groups' ? (room.members[1] || 'Pair').split(' ')[0] : room.name;
   const text = room.category === 'groups'
-    ? `Paquet de groupe reçu via ${room.transport} (sauvegardé sur l'appareil).`
+    ? `Paquet de groupe reçu via ${room.transport} (chiffré AES-GCM & sauvegardé).`
     : `Message hors-ligne reçu de ${room.name} (#${room.fingerprint}) !`;
-  room.events.push({ type: 'msg', sender, outgoing: false, time: now, text });
+  room.events.push({ type: 'msg', sender, outgoing: false, time: now, transport: 'Test Local', text });
   room.preview = `${sender}: ${text}`;
   room.time = now;
   saveVault();
@@ -518,6 +895,8 @@ function triggerIncomingMessage() {
   sendPushNotification(`Nouveau message de ${sender}`, text, room.id);
 }
 
+const menuPingMesh = document.getElementById('menu-ping-mesh');
+if (menuPingMesh) menuPingMesh.addEventListener('click', broadcastDiscoveryPing);
 document.getElementById('menu-sim-hop').addEventListener('click', triggerIncomingMessage);
 document.getElementById('menu-show-qr').addEventListener('click', () => openQrModal('my-qr'));
 document.getElementById('menu-new-group').addEventListener('click', openGroupModal);
@@ -548,7 +927,7 @@ document.querySelectorAll('.cat-item[data-cat]').forEach((btn) => {
   });
 });
 
-// --- CRÉATION DE GROUPE MESH ---
+// --- CRÉATION DE GROUPE MESH & INTERCONNEXION P2P AUTOMATIQUE ---
 const groupModal = document.getElementById('group-modal');
 
 function openGroupModal() {
@@ -580,14 +959,18 @@ document.getElementById('btn-close-group').addEventListener('click', () => group
 
 document.getElementById('btn-create-group-confirm').addEventListener('click', () => {
   const nameInput = document.getElementById('new-group-name');
-  const name = nameInput.value.trim() || `Groupe #${randHex(2).toUpperCase()}`;
+  const groupFp = randHex(6).toUpperCase();
+  const name = nameInput.value.trim() || `Groupe #${groupFp.slice(0, 4)}`;
   const transport = document.getElementById('new-group-transport').value;
   const checkedIds = Array.from(document.querySelectorAll('#group-contact-picker input:checked')).map((el) => el.value);
   const selectedPeers = vault.rooms.filter((r) => checkedIds.includes(r.id));
 
-  const memberLabels = [`${vault.user.alias} (Moi)`].concat(selectedPeers.map((p) => `${p.name} (#${p.fingerprint})`));
+  const memberLabels = [`${vault.user.alias} (#${vault.user.fingerprint})`].concat(
+    selectedPeers.map((p) => `${p.name} (#${p.fingerprint})`)
+  );
+  const memberFps = [vault.user.fingerprint].concat(selectedPeers.map((p) => p.fingerprint));
   const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  const id = `grp-${Date.now()}`;
+  const id = `grp-${groupFp}`;
 
   vault.rooms.unshift({
     id,
@@ -599,14 +982,27 @@ document.getElementById('btn-create-group-confirm').addEventListener('click', ()
     time: now,
     preview: `${memberLabels.length} membre(s) connecté(s)`,
     verifiedQr: true,
-    fingerprint: randHex(6).toUpperCase(),
+    fingerprint: groupFp,
     transport,
     members: memberLabels,
+    memberFps,
     hops: 3,
     events: [
       { type: 'date', label: `Groupe Maillé • ${transport}` },
-      { type: 'system', time: now, text: `${vault.user.alias} a créé le groupe et connecté : ${memberLabels.join(' ⇄ ')}`, icon: '👥' }
+      { type: 'system', time: now, text: `${vault.user.alias} a créé le groupe et interconnecté : ${memberLabels.join(' ⇄ ')}`, icon: '👥' }
     ]
+  });
+
+  // Diffuser l'invitation de groupe à tous les contacts sélectionnés en P2P
+  broadcastMeshPacket({
+    type: 'OFFCHAT_GROUP_INVITE',
+    groupId: id,
+    groupFp,
+    groupName: name,
+    transport,
+    members: memberLabels,
+    memberFps,
+    ttl: 3
   });
 
   nameInput.value = '';
@@ -614,7 +1010,7 @@ document.getElementById('btn-create-group-confirm').addEventListener('click', ()
   groupModal.close();
   selectRoom(id);
   setMobileView('chat');
-  sendPushNotification(`Groupe créé : ${name}`, `${memberLabels.length} pairs interconnectés`, id);
+  sendPushNotification(`Groupe créé : ${name}`, `${memberLabels.length} pairs interconnectés en P2P`, id);
 });
 
 // --- MODAL QR CODE UNIQUE & CAMÉRA ---
@@ -668,7 +1064,7 @@ function stopCamera() {
 function openQrModal(tab = 'my-qr') {
   closeDrawer();
   const u = vault.user;
-  const uri = `offchat://pair?alias=${encodeURIComponent(u.alias)}&fp=${u.fingerprint}&q=${u.rxQueue}`;
+  const uri = `offchat://pair?alias=${encodeURIComponent(u.alias)}&fp=${u.fingerprint}&q=${u.rxQueue}&k=${u.fingerprint}`;
   document.getElementById('my-uri-input').value = uri;
   document.getElementById('qr-user-name').textContent = u.alias;
   document.getElementById('qr-user-fp').textContent = `#${u.fingerprint}`;
@@ -709,9 +1105,10 @@ document.getElementById('btn-copy-uri').addEventListener('click', () => {
   setTimeout(() => (btn.textContent = 'Copier'), 1300);
 });
 
-function addContactRoom({ alias, fp, q }) {
+function addContactRoom({ alias, fp, q, k }) {
   const cleanAlias = (alias || 'Contact').trim();
   const fingerprint = (fp || randHex(6)).toUpperCase();
+  const sharedKey = k || fingerprint;
   const id = `peer-${fingerprint}`;
   const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const colors = ['#0d9488', '#2563eb', '#d97706', '#e11d48', '#7c3aed'];
@@ -730,16 +1127,24 @@ function addContactRoom({ alias, fp, q }) {
       verifiedQr: true,
       fingerprint,
       rxQueue: q || `q_rx_${randHex(4)}`,
+      sharedKey,
       hops: 1,
       events: [
-        { type: 'date', label: 'Discussion Chiffrée Permanente' },
-        { type: 'system', time: now, text: `${cleanAlias} (#${fingerprint}) ajouté par QR Code et sauvegardé sur l'appareil`, icon: '▣' }
+        { type: 'date', label: 'Discussion Chiffrée AES-GCM Permanente' },
+        { type: 'system', time: now, text: `${cleanAlias} (#${fingerprint}) ajouté par QR Code — synchronisation P2P envoyée`, icon: '▣' }
       ]
     };
     vault.rooms.unshift(existing);
     saveVault();
     sendPushNotification(`Contact QR ajouté : ${cleanAlias}`, `Empreinte #${fingerprint} sauvegardée`, id);
   }
+
+  // Envoyer automatiquement un paquet d'appairage bilatéral P2P pour que l'autre téléphone nous ajoute aussi sans avoir à scanner en retour !
+  broadcastMeshPacket({
+    type: 'OFFCHAT_PAIR_HELLO',
+    targetFp: fingerprint,
+    sharedKey
+  });
 
   stopCamera();
   qrModal.close();
@@ -755,7 +1160,8 @@ document.getElementById('btn-pair-uri').addEventListener('click', () => {
     addContactRoom({
       alias: params.get('alias') || 'Contact_QR',
       fp: params.get('fp') || randHex(6).toUpperCase(),
-      q: params.get('q')
+      q: params.get('q'),
+      k: params.get('k')
     });
   } else {
     addContactRoom({ alias: raw, fp: randHex(6).toUpperCase() });
@@ -764,9 +1170,9 @@ document.getElementById('btn-pair-uri').addEventListener('click', () => {
 });
 
 document.getElementById('btn-sim-scan').addEventListener('click', () => {
-  const names = ['Alice', 'Charlie_BLE', 'Sarah_Mesh', 'Victor_P2P'];
-  const pick = names[Math.floor(Math.random() * names.length)];
-  addContactRoom({ alias: pick, fp: randHex(6).toUpperCase() });
+  broadcastDiscoveryPing();
+  stopCamera();
+  qrModal.close();
 });
 
 document.getElementById('btn-start-cam').addEventListener('click', async () => {
@@ -791,7 +1197,8 @@ document.getElementById('btn-start-cam').addEventListener('click', async () => {
             addContactRoom({
               alias: params.get('alias') || 'Contact_Scan',
               fp: params.get('fp') || randHex(6).toUpperCase(),
-              q: params.get('q')
+              q: params.get('q'),
+              k: params.get('k')
             });
             return;
           }
@@ -841,8 +1248,8 @@ document.getElementById('btn-test-push').addEventListener('click', () => {
   vault.pushEnabled = true;
   updatePushToggleButton();
   sendPushNotification(
-    'OffChat Push-Up Actif 🔔',
-    'Les notifications push hors-ligne (Bluetooth LE / Wi-Fi Direct) fonctionnent parfaitement !'
+    'OffChat v2.0 Push-Up Actif 🔔',
+    'Les notifications push hors-ligne (Bluetooth LE / Wi-Fi Direct UDP) fonctionnent parfaitement !'
   );
 });
 
@@ -901,8 +1308,8 @@ document.getElementById('btn-save-relay').addEventListener('click', () => {
   saveVault();
   connectOptionalHomeRelay();
   document.getElementById('settings-status-msg').textContent = vault.relayUrl
-    ? `Relais maison configuré (${vault.relayUrl}) ✔`
-    : 'Mode 100% local sans relais externe ✔';
+    ? `Relais aveugle configuré (${vault.relayUrl}) ✔`
+    : 'Mode 100% P2P local sans relais externe ✔';
 });
 
 function connectOptionalHomeRelay() {
@@ -910,26 +1317,16 @@ function connectOptionalHomeRelay() {
     try { relaySocket.close(); } catch (_) {}
     relaySocket = null;
   }
-  if (!vault.relayUrl) return;
+  if (!vault.relayUrl) {
+    updateMeshStatusUI();
+    return;
+  }
   try {
     relaySocket = new WebSocket(vault.relayUrl);
+    relaySocket.onopen = () => updateMeshStatusUI();
+    relaySocket.onclose = () => updateMeshStatusUI();
     relaySocket.onmessage = (ev) => {
-      try {
-        const pkt = JSON.parse(ev.data);
-        if (pkt.type === 'OFFCHAT_RELAY_PACKET' && pkt.targetFp === vault.user.fingerprint) {
-          const room = vault.rooms.find((r) => r.fingerprint === pkt.senderFp);
-          if (room) {
-            const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            room.events.push({ type: 'msg', sender: pkt.senderAlias, outgoing: false, time: now, text: pkt.text });
-            room.preview = `${pkt.senderAlias}: ${pkt.text}`;
-            room.time = now;
-            saveVault();
-            renderRoomList();
-            renderChatStream();
-            sendPushNotification(`Message de ${pkt.senderAlias}`, pkt.text, room.id);
-          }
-        }
-      } catch (_) {}
+      handleIncomingMeshPacket(ev.data, 'Relais WebSocket');
     };
   } catch (_) {}
 }

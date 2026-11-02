@@ -57,9 +57,11 @@ cp "$PROJECT_DIR/index.html" "$PROJECT_DIR/style.css" "$PROJECT_DIR/app.js" "$BU
   --ks "$BUILD_DIR/release.keystore" \
   --ks-pass pass:offchat123 \
   --key-pass pass:offchat123 \
-  --out "$PROJECT_DIR/OffChat-v1.0.0.apk" \
+  --out "$PROJECT_DIR/OffChat-v2.0.0.apk" \
   "$BUILD_DIR/aligned.apk"
 
-"$BUILD_TOOLS/apksigner" verify --verbose "$PROJECT_DIR/OffChat-v1.0.0.apk"
+cp "$PROJECT_DIR/OffChat-v2.0.0.apk" "$PROJECT_DIR/OffChat-v1.0.0.apk"
+
+"$BUILD_TOOLS/apksigner" verify --verbose "$PROJECT_DIR/OffChat-v2.0.0.apk"
 rm -rf "$BUILD_DIR"
-ls -lh "$PROJECT_DIR/OffChat-v1.0.0.apk"
+ls -lh "$PROJECT_DIR/OffChat-v2.0.0.apk" "$PROJECT_DIR/OffChat-v1.0.0.apk"

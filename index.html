@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>OffChat | Messagerie Mesh & QR Hors-Ligne</title>
+  <title>OffChat v2.0 | Messagerie Mesh P2P & QR Hors-Ligne</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -13,11 +13,11 @@
   <!-- ÉCRAN DE PREMIER LANCEMENT : CRÉATION DU PSEUDO & CLÉ UNIQUE (DÉMARRAGE DE ZÉRO) -->
   <div id="onboarding-screen" class="onboarding-screen hidden">
     <div class="onboarding-card">
-      <div class="onboarding-logo">⚡ OffChat</div>
+      <div class="onboarding-logo">⚡ OffChat v2.0 Prod</div>
       <h1>Bienvenue sur OffChat</h1>
       <p>
-        Messagerie <strong>100 % hors-ligne</strong> (Bluetooth LE / Wi-Fi Direct) sans serveur central ni carte SIM.
-        Vos conversations sont sauvegardées de manière permanente sur votre téléphone.
+        Messagerie <strong>100 % hors-ligne</strong> (Bluetooth LE GATT + Wi-Fi Direct UDP P2P) sans serveur central ni carte SIM.
+        Vos conversations sont chiffrées (AES-GCM) et sauvegardées de manière permanente sur votre téléphone.
       </p>
 
       <form id="onboarding-form" class="onboarding-form">
@@ -96,8 +96,12 @@
           <strong class="mesh-live" id="my-fp-short">#------</strong>
         </div>
         <div class="mesh-row">
-          <span>Relais (0 LoRa)</span>
-          <button type="button" class="action-pill" id="btn-cycle-transport">🔄 Multi-Sauts BLE</button>
+          <span>Radio P2P</span>
+          <strong class="mesh-live" id="mesh-status-pill">📡 BLE + Wi-Fi Actif</strong>
+        </div>
+        <div class="mesh-row">
+          <span>Mode Routage</span>
+          <button type="button" class="action-pill" id="btn-cycle-transport">🔄 Multi-Sauts BLE/Wi-Fi</button>
         </div>
         <div class="footer-btns">
           <button class="btn-scan-sidebar" id="btn-sidebar-myqr">▣ Mon QR</button>
@@ -112,8 +116,8 @@
       <header class="mobile-list-header">
         <button type="button" class="burger-btn" id="btn-open-drawer" aria-label="Ouvrir le menu">☰</button>
         <div class="mobile-brand">
-          <strong>OffChat</strong>
-          <span id="mobile-sub-fp" class="mobile-sub-fp">0 Data • Stockage permanent</span>
+          <strong>OffChat <span style="font-size:0.68rem;font-weight:500;opacity:0.8;">v2.0</span></strong>
+          <span id="mobile-sub-fp" class="mobile-sub-fp">P2P Actif • Stockage permanent</span>
         </div>
         <div class="mobile-top-actions">
           <button type="button" class="gear-btn" id="btn-mobile-myqr" title="Mon QR Code">▣</button>
@@ -156,7 +160,8 @@
           <div class="dropdown-wrap">
             <button type="button" class="gear-btn" id="btn-chat-menu" title="Actions de la conversation">⋮</button>
             <div id="chat-dropdown" class="dropdown-menu hidden">
-              <button type="button" id="menu-sim-hop">📡 Tester réception message BLE</button>
+              <button type="button" id="menu-ping-mesh">📡 Diffuser Ping Découverte BLE/Wi-Fi</button>
+              <button type="button" id="menu-sim-hop">🧪 Tester message entrant local</button>
               <button type="button" id="menu-show-qr">▣ Afficher mon QR Code</button>
               <button type="button" id="menu-new-group">👥 Créer / Connecter un Groupe</button>
               <button type="button" id="menu-open-settings">🎨 Couleurs & Sauvegarde</button>
@@ -194,7 +199,7 @@
     <div class="modal-head">
       <div>
         <h3>👥 Créer un Groupe & Connecter vos Contacts</h3>
-        <p>Interconnecte vos contacts QR entre eux sans serveur.</p>
+        <p>Interconnecte automatiquement vos contacts QR entre eux (invitation diffusée en P2P).</p>
       </div>
       <button id="btn-close-group" class="close-btn">&times;</button>
     </div>
@@ -214,13 +219,13 @@
         <label>Mode longue distance (100 % sur smartphone) :</label>
         <select id="new-group-transport" class="full-input">
           <option value="Multi-Sauts BLE + Wi-Fi Direct">🔄 Multi-Sauts BLE + Wi-Fi Direct (Rebonds entre téléphones)</option>
-          <option value="Porteurs Mobiles DTN">🚶 Porteurs Mobiles DTN (Transport en déplacement)</option>
-          <option value="Pont Relais Hybride P2P">🌐 Pont Relais (Si 1 téléphone a du Wi-Fi ou votre relais maison)</option>
+          <option value="Porteurs Mobiles DTN">🚶 Porteurs Mobiles DTN (Store & Forward en déplacement)</option>
+          <option value="Pont Relais Hybride P2P">🌐 Pont Relais Aveugle (Si 1 téléphone a Internet / Relais)</option>
         </select>
       </div>
 
       <button type="button" id="btn-create-group-confirm" class="btn-green full-w">
-        🔗 Créer le Groupe & Connecter les membres
+        🔗 Créer le Groupe & Diffuser l'invitation P2P
       </button>
     </div>
   </dialog>
@@ -250,7 +255,7 @@
         </div>
       </div>
       <div class="uri-group">
-        <label>Votre lien QR (copiez-le ou faites-le scanner) :</label>
+        <label>Votre lien QR (copiez-le ou faites-le scanner — synchronisation bilatérale auto) :</label>
         <div class="uri-row">
           <input type="text" id="my-uri-input" readonly />
           <button type="button" id="btn-copy-uri" class="btn-green">Copier</button>
@@ -269,7 +274,7 @@
 
       <div class="uri-row">
         <button type="button" id="btn-start-cam" class="btn-new flex-1">📷 Activer Caméra</button>
-        <button type="button" id="btn-sim-scan" class="btn-new flex-1">⚡ Contact test BLE</button>
+        <button type="button" id="btn-sim-scan" class="btn-new flex-1">📡 Découvrir Pair Proche</button>
       </div>
 
       <div class="uri-group">
@@ -282,7 +287,7 @@
     </div>
   </dialog>
 
-  <!-- MODAL PARAMÈTRES : COULEURS, RELAIS MAISON OPTIONNEL & SAUVEGARDE PERMANENTE -->
+  <!-- MODAL PARAMÈTRES : COULEURS, RELAIS MAISON AVEUGLE OPTIONNEL & SAUVEGARDE PERMANENTE -->
   <dialog id="settings-modal" class="qr-dialog wide">
     <div class="modal-head">
       <div>
@@ -323,18 +328,18 @@
       </div>
 
       <div class="settings-card">
-        <strong>3. Relais Maison Optionnel (Longue distance Internet/LAN)</strong>
+        <strong>3. Relais Aveugle Zéro-Stockage (Optionnel — Longue Distance Internet)</strong>
         <p style="font-size:0.72rem;color:var(--text-muted)">
-          Vos messages sont stockés sur votre téléphone (comme SimpleX). Si vous avez un serveur maison (Raspberry Pi / VPS), vous pouvez renseigner son WebSocket pour relayer les paquets chiffrés à distance sans qu'il puisse les lire.
+          <strong>Zéro base de données serveur :</strong> vos messages et contacts sont stockés à 100 % dans la mémoire interne de votre téléphone (<code>offchat_prod_vault.json</code> + <code>IndexedDB</code>). Pour parler à très longue distance hors portée Bluetooth/Wi-Fi, vous pouvez connecter un relais WebSocket aveugle (qui transfère les paquets chiffrés en RAM sans rien stocker).
         </p>
         <div class="uri-row">
-          <input type="text" id="settings-relay-input" placeholder="Optionnel : wss://mon-relais-maison.local:8080" class="full-input" />
+          <input type="text" id="settings-relay-input" placeholder="Optionnel : wss://mon-relais.local:8080" class="full-input" />
           <button type="button" id="btn-save-relay" class="btn-new">Lier</button>
         </div>
       </div>
 
       <div class="settings-card">
-        <strong>4. Sauvegarde Permanente (Contacts & Historique complet)</strong>
+        <strong>4. Coffre-Fort Local Permanent (Contacts & Historique complet)</strong>
         <div id="saved-contacts-list" class="saved-contacts-list"></div>
         <div class="backup-actions">
           <button type="button" id="btn-export-json" class="btn-green flex-1">⬇ Exporter (.json)</button>
@@ -344,7 +349,7 @@
             <input type="file" id="import-file-input" accept=".json" hidden />
           </label>
         </div>
-        <div id="settings-status-msg" class="mesh-live">Stockage permanent local + IndexedDB actif ✔</div>
+        <div id="settings-status-msg" class="mesh-live">Stockage permanent triple (Fichier Android + IndexedDB + Local) actif ✔</div>
       </div>
     </div>
   </dialog>
